@@ -61,8 +61,8 @@ sudo ./nr-uesoftmodem \
   --rfsimulator.[0].serveraddr server
 
 PDU Session 확인:
-
 ifconfig oaitun_ue1
+
 5. VM3 gNB2 실행
 cd ~/openairinterface5g/cmake_targets/ran_build/build
 
@@ -74,6 +74,7 @@ sudo ./nr-softmodem \
   --gNBs.[0].min_rxtxtime 6 \
   --rfsim \
   --rfsimulator.[0].serveraddr 192.168.192.146
+
 6. N2 Handover 실행
 
 Source gNB인 VM2에서:
@@ -93,3 +94,27 @@ oaitun_ue1 생성 확인
 VM3 gNB2 실행
         ↓
 VM2에서 N2 Handover Trigger
+
+7.UE 트래픽 NAT 설정 — VM2, VM3
+
+sudo iptables -t nat -A POSTROUTING \
+  -s 10.0.0.0/24 \
+  -o ens33 \
+  -j MASQUERADE
+
+Forward 허용:
+sudo iptables -A FORWARD \
+  -i upfgtp \
+  -o ens33 \
+  -j ACCEPT
+
+응답 트래픽 허용:
+sudo iptables -A FORWARD \
+  -i ens33 \
+  -o upfgtp \
+  -m conntrack \
+  --ctstate RELATED,ESTABLISHED \
+  -j ACCEPT
+
+UPF라우팅 확인
+sudo ip route add 10.0.0.0/24 dev upfgtp
