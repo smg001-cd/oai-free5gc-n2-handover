@@ -1,0 +1,17 @@
+# Merge these fields into the existing free5gc-nef service.
+# Replace 192.168.192.145 with the core VM address.
+services:
+  free5gc-nef:
+    build:
+      context: ./base
+      dockerfile: Dockerfile.nf
+      args:
+        F5GC_MODULE: nef
+    image: free5gc/nef:scf-local
+    ports:
+      - "192.168.192.145:8005:8000"
+    env_file:
+      - ./flask-nef/scf.env
+    environment:
+      GIN_MODE: release
+      SCF_INTENT_URL: http://192.168.192.145:5001/intent
