@@ -17,12 +17,9 @@ OAUTH_DIR = Path(os.environ.get("IUF_OAUTH_DIR", BASE_DIR / "oauth"))
 AF_ID_FILE = OAUTH_DIR / "af-id.txt"
 TOKEN_FILE = OAUTH_DIR / "token.json"
 
-NEF_URL = os.environ.get(
-    "NEF_URL",
-    "http://192.168.192.145:8005/lab-intents/v1/intents",
-)
-NRF_URL = os.environ.get("NRF_URL", "").rstrip("/")
-AF_IP = os.environ.get("AF_IP", "192.168.192.147")
+NEF_URL = os.environ.get("NEF_URL", "").strip()
+NRF_URL = os.environ.get("NRF_URL", "").strip().rstrip("/")
+AF_IP = os.environ.get("AF_IP", "").strip()
 PLMN_MCC = os.environ.get("PLMN_MCC", "001")
 PLMN_MNC = os.environ.get("PLMN_MNC", "01")
 
@@ -39,9 +36,13 @@ def validate_url(name, value):
         raise RuntimeError(f"Invalid {name}: {value!r}")
 
 
+if not NEF_URL:
+    raise RuntimeError("NEF_URL must identify the NEF endpoint on the Core VM")
 validate_url("NEF_URL", NEF_URL)
 if NRF_URL:
     validate_url("NRF_URL", NRF_URL)
+    if not AF_IP:
+        raise RuntimeError("AF_IP must identify the IUF VM when NRF_URL is configured")
 
 
 def jwt_expiry(token):
