@@ -1,17 +1,33 @@
-# IUF → free5GC NEF → Flask intent 전달 실험
+# IUF Web → free5GC NEF → Flask SCF 대체 수신기
 
-이 문서는 별도의 기존 SCF 프로젝트를 실행하지 않고 Flask `app.py`를 최소한의 SCF 대체 수신기로 사용하여 다음 경로를 검증한 방법을 설명한다.
+이 문서는 IUF VM의 웹 화면에서 입력한 security intent를 OAuth로 보호된 free5GC NEF가 받은 뒤, Core VM의 Flask `app.py`로 전달하고 JSONL 파일에 저장하는 전체 적용 절차를 설명한다.
+
+## 구현 범위
 
 ```text
-IUF VM (192.168.192.147)
-  → free5GC NEF (Core VM 192.168.192.145:8005)
-  → Flask app.py (Core VM 192.168.192.145:5001)
+Browser
+  → IUF Web backend (192.168.192.147:5000)
+  → NRF OAuth token issuance (192.168.192.145:8001)
+  → free5GC NEF custom API (192.168.192.145:8005)
+  → Flask SCF substitute (192.168.192.145:5001)
   → flask-nef/logs/intents.jsonl
 ```
 
-검증 범위는 intent 원문이 OAuth 인증을 거쳐 실제 NEF에 도착하고, NEF가 Flask로 전달하여 파일에 저장되는 단계까지다. `forwardedToCore=false`는 SMF·AMF 정책 적용과 핸드오버 실행은 아직 연결하지 않았다는 의미다.
+현재 구현은 IUF → NEF → Flask 기반 SCF 대체 수신기의 통신과 원문 보관을 검증한다. Flask는 정책 변환, PCF·SMF·AMF 호출과 실제 핸드오버 제어를 수행하지 않는다. 응답의 `forwardedToCore=false`는 intent가 Core VM에 저장되지 않았다는 뜻이 아니라, SMF·AMF 정책 처리까지 전달하지 않았다는 뜻이다.
 
-추가한 `/lab-intents/v1/intents`는 실험용 API이며 표준 3GPP NEF API가 아니다. 기존 free5GC Traffic Influence API는 단일 UE 요청을 PCF로, 그룹 요청을 UDR로 처리하므로 임의 intent 원문 전달에는 별도 라우트가 필요하다.
+추가한 `/lab-intents/v1/intents`는 실험용 API이며 표준 3GPP NEF API가 아니다.
+
+## 역할 구분
+
+| 구성요소 | 역할 |
+|---|---|
+| IUF React | intent 입력과 결과 표시 |
+| IUF Flask backend | AF 등록, OAuth 토큰 자동 발급·갱신, NEF 호출 |
+| NRF | NEF 접근용 OAuth Access Token 발행 |
+| 수정된 NEF | OAuth 검증, request ID와 SHA-256 생성, Core Flask로 중계 |
+| Core Flask `app.py` | NEF relay key 검증, intent 원문 저장, HTTP 201 응답 |
+
+Core VM의 Python 토큰 발급 파일은 사용하지 않는다. 토큰은 IUF backend가 NRF의 `/oauth2/token`을 호출해 직접 받는다.
 
 ## 저장소 파일
 
@@ -19,39 +35,48 @@ IUF VM (192.168.192.147)
 core/
 ├── README_IUF_NEF_FLASK.md
 ├── docker-compose.nef-snippet.yaml
-├── examples/policy.json
 ├── nef/
 │   ├── lab_scf.go
 │   └── server.go.patch
 └── flask-nef/
     ├── app.py
-    ├── issue_token.py
     └── requirements.txt
-```
 
-토큰, AF UUID, 공유 키, 가상환경과 실행 로그는 저장소에 포함하지 않는다. `core/.gitignore`가 이를 제외한다.
+iuf/
+├── README.md
+├── examples/policy.json
+├── backend/
+│   ├── app.py
+│   ├── iuf.env.example
+│   └── requirements.txt
+└── frontend/
+    ├── package.json
+    ├── public/index.html
+    └── src/
+        ├── App.js
+        ├── App.css
+        └── index.js
+```
 
 ## 1. 전제 조건
 
 - free5GC v4.2.3 기반 `free5gc-compose`
-- `base/free5gc/NFs/nef` 소스와 `base/Dockerfile.nf`가 존재
+- `base/free5gc/NFs/nef` 소스와 `base/Dockerfile.nf` 존재
+- Core VM: `192.168.192.145`
+- IUF VM: `192.168.192.147`
 - NRF OAuth 활성화
-- NEF의 `serviceList`에 `3gpp-traffic-influence` 존재
 - Python 3, Docker, Docker Compose, OpenSSL
-- 아래 예시의 Core VM IP는 `192.168.192.145`, IUF VM IP는 `192.168.192.147`
 
-다른 환경에서는 두 IP, PLMN, Docker 네트워크와 포트를 실제 값으로 바꾼다.
-
-저장소와 free5gc-compose가 서로 다른 디렉터리에 있다고 가정한다.
+다른 환경에서는 IP, PLMN, 포트와 Docker 서비스 이름을 실제 값으로 바꾼다.
 
 ```bash
-git clone https://github.com/smg001-cd/oai-free5gc-n2-handover.git \
-  /home/tjralsrb/oai-free5gc-n2-handover
-RELAY_SOURCE=/home/tjralsrb/oai-free5gc-n2-handover
-FREE5GC_COMPOSE=/home/tjralsrb/free5gc-compose
+export PROJECT_SOURCE=/home/tjralsrb/oai-free5gc-n2-handover
+export FREE5GC_COMPOSE=/home/tjralsrb/free5gc-compose
 ```
 
-`config/nrfcfg.yaml`의 관련 설정:
+## 2. NRF와 NEF 설정 확인
+
+`$FREE5GC_COMPOSE/config/nrfcfg.yaml`:
 
 ```yaml
 configuration:
@@ -61,39 +86,48 @@ configuration:
     mnc: "01"
 ```
 
-`config/nefcfg.yaml`에는 다음 서비스가 있어야 한다.
+`$FREE5GC_COMPOSE/config/nefcfg.yaml`의 `serviceList`에는 다음 항목이 있어야 한다.
 
 ```yaml
 serviceList:
   - serviceName: 3gpp-traffic-influence
 ```
 
-커스텀 이름인 `lab-intents`는 `nefcfg.yaml`에 추가하지 않는다.
+커스텀 API 이름인 `lab-intents`는 `nefcfg.yaml`에 넣지 않는다. NEF 커스텀 라우트의 OAuth scope로 기존 `3gpp-traffic-influence` 서비스를 사용한다.
 
-## 2. NEF 소스 수정
+## 3. NEF 소스 수정
 
-free5gc-compose 루트에서 실행한다.
+기존 파일을 백업한다.
 
 ```bash
 cd "$FREE5GC_COMPOSE"
-```
 
-기존 서버 파일을 백업한다.
-
-```bash
 cp -n \
   base/free5gc/NFs/nef/internal/sbi/server.go \
-  base/free5gc/NFs/nef/internal/sbi/server.go.before-scf
+  base/free5gc/NFs/nef/internal/sbi/server.go.before-iuf-relay
 ```
 
-저장소의 Go 파일을 NEF 소스에 복사한다. 저장소를 별도 위치에 clone했다면 앞 경로를 해당 위치로 변경한다.
+커스텀 라우트 코드를 복사한다.
 
 ```bash
-cp "$RELAY_SOURCE/core/nef/lab_scf.go" \
+cp "$PROJECT_SOURCE/core/nef/lab_scf.go" \
   base/free5gc/NFs/nef/internal/sbi/lab_scf.go
 ```
 
-`base/free5gc/NFs/nef/internal/sbi/server.go`에서 다음 코드 바로 아래에 라우트 등록 한 줄을 추가한다.
+`base/free5gc/NFs/nef/internal/sbi/server.go`에서 다음 두 줄을 찾는다.
+
+```go
+s.router = logger_util.NewGinWithLogrus(logger.GinLog)
+s.router.Use(metrics.InboundMetrics())
+```
+
+바로 아래에 한 줄을 추가한다.
+
+```go
+s.mountSCFRelay()
+```
+
+최종 형태:
 
 ```go
 s.router = logger_util.NewGinWithLogrus(logger.GinLog)
@@ -101,14 +135,14 @@ s.router.Use(metrics.InboundMetrics())
 s.mountSCFRelay()
 ```
 
-변경 내용은 `core/nef/server.go.patch`에도 표시되어 있다. 같은 줄을 중복 추가하지 않는다.
+`core/nef/server.go.patch`에서도 같은 변경을 볼 수 있다. 같은 줄을 두 번 추가하지 않는다.
 
 ```bash
-grep -n -C 3 'mountSCFRelay' \
+grep -n -C 3 mountSCFRelay \
   base/free5gc/NFs/nef/internal/sbi/server.go
 ```
 
-Go가 설치되어 있으면 형식을 정리한다.
+Go 형식을 정리한다.
 
 ```bash
 gofmt -w \
@@ -116,125 +150,176 @@ gofmt -w \
   base/free5gc/NFs/nef/internal/sbi/server.go
 ```
 
-## 3. Flask 코드 배치와 공유 키 생성
+## 4. Core Flask SCF 대체 수신기 배치
 
 ```bash
 cd "$FREE5GC_COMPOSE"
 mkdir -p flask-nef/logs
 ```
 
-기존 `flask-nef/app.py`가 있다면 먼저 백업하고 저장소 파일을 복사한다.
+기존 파일이 있다면 백업한 뒤 저장소 파일을 복사한다.
 
 ```bash
-cp -n flask-nef/app.py flask-nef/app.py.before-iuf-nef-relay
-cp "$RELAY_SOURCE/core/flask-nef/app.py" flask-nef/app.py
-cp "$RELAY_SOURCE/core/flask-nef/issue_token.py" flask-nef/issue_token.py
-cp "$RELAY_SOURCE/core/flask-nef/requirements.txt" flask-nef/requirements.txt
+cp -n flask-nef/app.py flask-nef/app.py.before-iuf-relay
+
+cp "$PROJECT_SOURCE/core/flask-nef/app.py" \
+  flask-nef/app.py
+
+cp "$PROJECT_SOURCE/core/flask-nef/requirements.txt" \
+  flask-nef/requirements.txt
 ```
 
-NEF와 Flask가 공유할 키를 한 번 생성한다.
+NEF와 Core Flask 사이에서만 사용하는 공유 키를 한 번 생성한다.
 
 ```bash
-cd /home/tjralsrb/free5gc-compose/flask-nef
+cd "$FREE5GC_COMPOSE/flask-nef"
 umask 077
 openssl rand -hex 32 | sed 's/^/SCF_RELAY_KEY=/' > scf.env
 chmod 600 scf.env
 ```
 
+이 키는 OAuth Access Token과 다르다.
+
+```text
+IUF → NEF    : NRF가 발행한 OAuth Bearer Token
+NEF → Flask  : scf.env의 X-SCF-Relay-Key
+```
+
 `scf.env`는 Git에 올리지 않는다.
 
-## 4. Docker Compose의 NEF 서비스 수정
+## 5. Docker Compose 수정
 
-`core/docker-compose.nef-snippet.yaml`을 참고하여 실제 `docker-compose.yaml`의 `free5gc-nef` 서비스에 `build`, 새 이미지, 외부 포트, `env_file`, `SCF_INTENT_URL`을 병합한다. 기존 `volumes`, `networks`, `depends_on`은 유지한다.
+`core/docker-compose.nef-snippet.yaml`을 참고하여 실제 `$FREE5GC_COMPOSE/docker-compose.yaml`에 필요한 항목을 병합한다. 기존 서비스의 `volumes`, `networks`, `depends_on`, `command`는 유지한다.
+
+### NRF 외부 포트
+
+IUF backend가 NRF에서 토큰을 직접 발급받을 수 있도록 Core VM `8001`을 NRF 컨테이너 `8000`에 연결한다.
+
+```yaml
+free5gc-nrf:
+  ports:
+    - "192.168.192.145:8001:8000"
+```
+
+### NEF 빌드와 외부 포트
 
 ```yaml
 free5gc-nef:
-  container_name: nef
   build:
     context: ./base
     dockerfile: Dockerfile.nf
     args:
       F5GC_MODULE: nef
-  image: free5gc/nef:scf-local
-  command: ./nef -c ./config/nefcfg.yaml
-  expose:
-    - "8000"
+  image: free5gc/nef:iuf-relay
   ports:
     - "192.168.192.145:8005:8000"
-  volumes:
-    - ./config/nefcfg.yaml:/free5gc/config/nefcfg.yaml
-    - ./cert:/free5gc/cert
   env_file:
     - ./flask-nef/scf.env
   environment:
     GIN_MODE: release
     SCF_INTENT_URL: http://192.168.192.145:5001/intent
-  networks:
-    privnet:
-      aliases:
-        - nef.free5gc.org
-  depends_on:
-    - db
-    - free5gc-nrf
 ```
 
-외부 IUF VM이 접근해야 하므로 `127.0.0.1:8005:8000`만 사용하지 않는다. 다른 환경에서는 `192.168.192.145`를 Core VM IP로 바꾼다.
+설정을 검사한다.
 
 ```bash
+cd "$FREE5GC_COMPOSE"
 docker compose config --quiet
 ```
 
-## 5. NEF 이미지 빌드 및 적용
-
-`base/Dockerfile.nf`가 사용하는 기반 이미지가 없으면 먼저 빌드한다.
+호스트 방화벽을 사용하면 IUF VM만 허용한다.
 
 ```bash
+sudo ufw allow from 192.168.192.147 to any port 8001 proto tcp
+sudo ufw allow from 192.168.192.147 to any port 8005 proto tcp
+```
+
+Core Flask `5001`은 NEF 컨테이너가 접근해야 한다. Docker와 호스트 방화벽 구성에 따라 `privnet` 대역 또는 필요한 출발지만 허용한다.
+
+## 6. NEF 이미지 빌드와 Core 서비스 적용
+
+기반 이미지가 없으면 먼저 만든다.
+
+```bash
+cd "$FREE5GC_COMPOSE"
+
 docker image inspect free5gc/base >/dev/null 2>&1 || \
 docker build -t free5gc/base -f base/Dockerfile base
 ```
 
-NEF를 빌드하고 교체한다.
+NEF를 빌드한다.
 
 ```bash
 docker compose build free5gc-nef
+```
+
+NRF를 먼저 적용하고 NEF를 시작한다. NRF 재시작 뒤 NEF를 다시 시작하면 NEF profile이 NRF에 등록된다.
+
+```bash
+docker compose up -d --no-deps --force-recreate free5gc-nrf
 docker compose up -d --no-deps --force-recreate free5gc-nef
 ```
 
-전체 코어를 기동하면서 변경사항을 빌드하려면 다음 명령을 사용할 수 있다.
+전체 코어를 함께 시작하려면:
 
 ```bash
 docker compose up -d --build
 ```
 
-확인:
+상태를 확인한다.
 
 ```bash
+docker compose ps free5gc-nrf free5gc-nef
+docker compose port free5gc-nrf 8000
 docker compose port free5gc-nef 8000
 docker inspect nef --format '{{.Config.Image}}'
-docker compose logs --since 2m free5gc-nef free5gc-nrf
 ```
 
-정상 상태에서는 `192.168.192.145:8005`, `free5gc/nef:scf-local`, NRF 등록 성공과 OAuth 활성화 로그가 확인된다.
+예상 외부 주소:
 
-## 6. Python 환경과 Flask 실행
+```text
+NRF  192.168.192.145:8001
+NEF  192.168.192.145:8005
+```
+
+등록 로그를 확인한다.
 
 ```bash
-cd /home/tjralsrb/free5gc-compose
+docker compose logs --since 2m free5gc-nrf free5gc-nef
+```
+
+NEF 로그에 다음 내용이 있어야 한다.
+
+```text
+OAuth2 setting receive from NRF: true
+register to NRF successfully
+```
+
+## 7. Core Flask 실행
+
+Python 환경을 한 번 만든다.
+
+```bash
+cd "$FREE5GC_COMPOSE"
 python3 -m venv .venv-core
 source .venv-core/bin/activate
+python3 -m pip install --upgrade pip
 python3 -m pip install -r flask-nef/requirements.txt
-python3 -m py_compile flask-nef/app.py flask-nef/issue_token.py
+python3 -m py_compile flask-nef/app.py
 ```
 
-Flask를 실행한다.
+Core Flask를 실행한다.
 
 ```bash
-cd /home/tjralsrb/free5gc-compose/flask-nef
-source /home/tjralsrb/free5gc-compose/.venv-core/bin/activate
+cd "$FREE5GC_COMPOSE/flask-nef"
+source "$FREE5GC_COMPOSE/.venv-core/bin/activate"
+
 set -a
 source scf.env
 set +a
+
 mkdir -p logs
+
 python3 -m gunicorn \
   --bind 0.0.0.0:5001 \
   --workers 1 \
@@ -245,133 +330,110 @@ python3 -m gunicorn \
   app:app 2>&1 | tee -a logs/flask.log
 ```
 
-다른 터미널에서 상태를 확인한다.
+정상 상태:
 
 ```bash
-curl -i http://127.0.0.1:5001/health
-docker compose exec free5gc-nef \
-  wget -qO- http://192.168.192.145:5001/health
-```
-
-## 7. OAuth 토큰 발급
-
-현재 NRF 컨테이너 IP를 조회한다. 이 변수는 현재 셸에만 존재하므로 토큰 발급도 같은 셸에서 실행한다.
-
-```bash
-cd /home/tjralsrb/free5gc-compose
-NRF_CONTAINER_IP="$(
-  docker inspect nrf \
-    --format '{{range .NetworkSettings.Networks}}{{println .IPAddress}}{{end}}' |
-  sed -n '/./{p;q;}'
-)"
-printf 'NRF IP: %s\n' "$NRF_CONTAINER_IP"
-```
-
-토큰을 발급한다.
-
-```bash
-source .venv-core/bin/activate
-NRF_URL="http://${NRF_CONTAINER_IP}:8000" \
-AF_IP="192.168.192.145" \
-PLMN_MCC="001" \
-PLMN_MNC="01" \
-python3 flask-nef/issue_token.py
-```
-
-정상 결과:
-
-```text
-AF registration: HTTP 200 또는 201
-Token issuance: HTTP 200
-Scope: 3gpp-traffic-influence
-Expires in: 1000 seconds
-```
-
-토큰은 `flask-nef/oauth/token.json`에 저장되고 약 1000초 동안 유효하다.
-
-## 8. IUF VM으로 토큰과 예제 복사
-
-SSH를 사용하는 예:
-
-```bash
-cd ~/iuf
-scp tjralsrb@192.168.192.145:/home/tjralsrb/free5gc-compose/flask-nef/oauth/token.json ./nef-token.json
-chmod 600 nef-token.json
-export NEF_ACCESS_TOKEN="$(python3 -c 'import json; print(json.load(open("nef-token.json"))["access_token"])')"
-printf 'token length: %s\n' "${#NEF_ACCESS_TOKEN}"
-```
-
-예제 intent를 `policy.json`으로 준비하고 JSON 문법을 확인한다.
-
-```bash
-python3 -m json.tool policy.json
-```
-
-`intentId`는 최상위 문자열이며 영문, 숫자, `_`, `.`, `:`, `-`를 사용한 1~128자 값이어야 한다.
-
-## 9. IUF에서 NEF로 전송
-
-```bash
-curl -i --max-time 20 \
-  -X POST \
-  'http://192.168.192.145:8005/lab-intents/v1/intents' \
-  -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer ${NEF_ACCESS_TOKEN}" \
-  --data-binary '@policy.json'
-```
-
-성공 응답:
-
-```http
-HTTP/1.1 201 Created
+curl -s http://127.0.0.1:5001/health | python3 -m json.tool
 ```
 
 ```json
 {
-  "status": "stored",
-  "intentId": "intent-001",
-  "requestId": "...",
-  "sha256": "...",
-  "forwardedToCore": false
+  "service": "flask-nef-scf",
+  "status": "ok"
 }
 ```
 
-## 10. 전달 검증과 로그
+NEF 컨테이너에서도 확인한다.
+
+```bash
+docker compose exec free5gc-nef \
+  wget -qO- http://192.168.192.145:5001/health
+```
+
+## 8. IUF 설치와 실행
+
+IUF VM에서는 저장소의 `iuf/README.md`를 따른다. IUF backend가 다음 작업을 자동으로 수행한다.
+
+```text
+AF ID 생성 및 유지
+→ NRF에 AF profile 등록
+→ targetNfType=NEF, scope=3gpp-traffic-influence 토큰 요청
+→ IUF VM의 backend/oauth/token.json 저장
+→ NEF 요청에 Bearer Token 추가
+→ 만료 전 자동 재발급
+```
+
+Core VM에서는 별도의 Python 토큰 발급 스크립트를 실행하지 않는다.
+
+## 9. 전체 전달 검증
+
+IUF 웹에서 intent를 보내고 응답의 `requestId`를 기록한다.
 
 NEF 로그:
 
 ```bash
-docker compose logs --since 10m free5gc-nef | grep 'NEF_INTENT'
+cd "$FREE5GC_COMPOSE"
+docker compose logs --since 10m free5gc-nef | grep NEF_INTENT
 ```
 
-Flask 로그와 저장된 원본:
-
-```bash
-tail -n 20 flask-nef/logs/flask.log
-tail -n 5 flask-nef/logs/intents.jsonl
-```
-
-성공 시 다음 세 기록의 `requestId`와 `sha256`가 일치한다.
+예상 로그:
 
 ```text
-IUF HTTP 201 응답
-NEF_INTENT ... received / scf_status=201
-SCF_STORED ... POST /intent 201
+NEF_INTENT intentId=intent-001 requestId=... sha256=... received
+NEF_INTENT intentId=intent-001 requestId=... scf_status=201
 ```
 
-실험에서는 IUF 주소 `192.168.192.147`, HTTP `201`, 동일한 request ID와 SHA-256을 통해 IUF → NEF → Flask → JSONL 저장 경로를 확인했다.
+Core Flask 실행 로그:
 
-## 오류 해석
+```bash
+tail -n 20 "$FREE5GC_COMPOSE/flask-nef/logs/flask.log"
+```
+
+저장된 전체 intent:
+
+```bash
+tail -n 1 "$FREE5GC_COMPOSE/flask-nef/logs/intents.jsonl" | \
+python3 -m json.tool
+```
+
+실시간 확인:
+
+```bash
+tail -f "$FREE5GC_COMPOSE/flask-nef/logs/intents.jsonl"
+```
+
+IUF 웹 응답, NEF 로그와 `intents.jsonl`의 `requestId` 및 SHA-256이 같으면 다음 경로가 확인된 것이다.
+
+```text
+IUF Web → IUF backend → NEF → Flask SCF substitute → JSONL
+```
+
+## 10. 재시작 순서
+
+Core VM 재부팅 또는 Docker 재생성 후:
+
+```bash
+cd "$FREE5GC_COMPOSE"
+docker compose up -d
+docker compose restart free5gc-nef
+```
+
+Core Flask를 실행하고 IUF backend를 실행한다. IUF backend의 메모리 토큰이 없어도 첫 intent 전송 시 NRF에서 자동 발급하므로 Core의 토큰 발급 작업은 필요 없다.
+
+## 오류 해결
 
 | 오류 | 확인할 내용 |
 |---|---|
-| `401 verify OAuth Authorization header invalid` | 토큰 누락·만료·잘못된 환경변수 |
+| `401 verify OAuth Authorization header invalid` | IUF backend 자동 갱신 로그, NRF·NEF 시간과 인증서 확인 |
 | `400 valid string intentId required` | 최상위 문자열 `intentId` 확인 |
-| `404 Not Found` | 커스텀 NEF 이미지와 라우트 적용 확인 |
-| `Connection refused` on 8005 | NEF 컨테이너 및 Compose `ports` 확인 |
-| `502 SCF connection failed` | Flask 5001 실행과 컨테이너→호스트 접근 확인 |
-| `503 SCF relay is not configured` | `scf.env`, `env_file`, `SCF_INTENT_URL` 확인 |
-| `No module named requests` | 활성 Python에서 `python3 -m pip install requests` |
+| `404 Not Found` | 수정한 NEF 이미지와 `mountSCFRelay()` 적용 확인 |
+| NRF `8001 Connection refused` | `free5gc-nrf`의 `192.168.192.145:8001:8000` 매핑 확인 |
+| NEF `8005 Connection refused` | `free5gc-nef`의 `192.168.192.145:8005:8000` 매핑 확인 |
+| `invalid_client` 또는 `no producerNfInfor` | NRF 기동 후 NEF 재시작 및 등록 성공 확인 |
+| `502 SCF connection failed` | Core Flask `5001`, `SCF_INTENT_URL`, 방화벽 확인 |
+| `401 NEF relay key invalid` | NEF와 Core Flask가 같은 `scf.env` 값을 읽는지 확인 |
 | `No space left on device` | `docker builder prune -f`; MongoDB 볼륨은 삭제하지 않음 |
 
 `docker system prune --volumes`는 MongoDB 데이터 볼륨까지 삭제할 수 있으므로 사용하지 않는다.
+
+
