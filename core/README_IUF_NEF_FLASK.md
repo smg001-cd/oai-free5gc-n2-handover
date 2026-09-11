@@ -2,14 +2,38 @@
 
 이 문서는 IUF VM의 웹 화면에서 입력한 security intent를 OAuth로 보호된 free5GC NEF가 받은 뒤, Core VM의 Flask `app.py`로 전달하고 JSONL 파일에 저장하는 전체 적용 절차를 설명한다.
 
+## 주소 표기
+
+이 문서에서는 특정 실험 환경의 고정 IP를 사용하지 않고 다음 변수로 VM을 구분한다.
+
+| 표기 | 의미 |
+|---|---|
+| `${CORE_VM_IP}` | free5GC NRF, NEF와 Flask 수신기가 실행되는 Core VM의 IPv4 주소 |
+| `${IUF_VM_IP}` | IUF 웹 또는 명령줄 클라이언트가 실행되는 IUF VM의 IPv4 주소 |
+
+각 VM에서 실제 주소를 확인한다.
+
+```bash
+ip -4 -br addr
+```
+
+명령을 실행하기 전에 현재 터미널에 자신의 주소를 설정한다. 아래의 `<...>` 부분은 실제 값으로 바꾼다.
+
+```bash
+export CORE_VM_IP="<Core VM IPv4 address>"
+export IUF_VM_IP="<IUF VM IPv4 address>"
+```
+
+이 변수는 문서의 명령과 Docker Compose 예제에서 계속 사용된다.
+
 ## 구현 범위
 
 ```text
 Browser
-  → IUF Web backend (192.168.192.147:5000)
-  → NRF OAuth token issuance (192.168.192.145:8001)
-  → free5GC NEF custom API (192.168.192.145:8005)
-  → Flask SCF substitute (192.168.192.145:5001)
+  → IUF Web backend (${IUF_VM_IP}:5000)
+  → NRF OAuth token issuance (${CORE_VM_IP}:8001)
+  → free5GC NEF custom API (${CORE_VM_IP}:8005)
+  → Flask SCF substitute (${CORE_VM_IP}:5001)
   → flask-nef/logs/intents.jsonl
 ```
 
@@ -62,8 +86,8 @@ iuf/
 
 - free5GC v4.2.3 기반 `free5gc-compose`
 - `base/free5gc/NFs/nef` 소스와 `base/Dockerfile.nf` 존재
-- Core VM: `192.168.192.145`
-- IUF VM: `192.168.192.147`
+- Core VM: `${CORE_VM_IP}`
+- IUF VM: `${IUF_VM_IP}`
 - NRF OAuth 활성화
 - Python 3, Docker, Docker Compose, OpenSSL
 
@@ -198,7 +222,7 @@ IUF backend가 NRF에서 토큰을 직접 발급받을 수 있도록 Core VM `80
 ```yaml
 free5gc-nrf:
   ports:
-    - "192.168.192.145:8001:8000"
+    - "${CORE_VM_IP}:8001:8000"
 ```
 
 ### NEF 빌드와 외부 포트
@@ -212,12 +236,12 @@ free5gc-nef:
       F5GC_MODULE: nef
   image: free5gc/nef:iuf-relay
   ports:
-    - "192.168.192.145:8005:8000"
+    - "${CORE_VM_IP}:8005:8000"
   env_file:
     - ./flask-nef/scf.env
   environment:
     GIN_MODE: release
-    SCF_INTENT_URL: http://192.168.192.145:5001/intent
+    SCF_INTENT_URL: http://${CORE_VM_IP}:5001/intent
 ```
 
 설정을 검사한다.
@@ -230,8 +254,8 @@ docker compose config --quiet
 호스트 방화벽을 사용하면 IUF VM만 허용한다.
 
 ```bash
-sudo ufw allow from 192.168.192.147 to any port 8001 proto tcp
-sudo ufw allow from 192.168.192.147 to any port 8005 proto tcp
+sudo ufw allow from ${IUF_VM_IP} to any port 8001 proto tcp
+sudo ufw allow from ${IUF_VM_IP} to any port 8005 proto tcp
 ```
 
 Core Flask `5001`은 NEF 컨테이너가 접근해야 한다. Docker와 호스트 방화벽 구성에 따라 `privnet` 대역 또는 필요한 출발지만 허용한다.
@@ -278,8 +302,8 @@ docker inspect nef --format '{{.Config.Image}}'
 예상 외부 주소:
 
 ```text
-NRF  192.168.192.145:8001
-NEF  192.168.192.145:8005
+NRF  ${CORE_VM_IP}:8001
+NEF  ${CORE_VM_IP}:8005
 ```
 
 등록 로그를 확인한다.
@@ -347,7 +371,7 @@ NEF 컨테이너에서도 확인한다.
 
 ```bash
 docker compose exec free5gc-nef \
-  wget -qO- http://192.168.192.145:5001/health
+  wget -qO- http://${CORE_VM_IP}:5001/health
 ```
 
 ## 8. IUF 설치와 실행
@@ -427,8 +451,8 @@ Core Flask를 실행하고 IUF backend를 실행한다. IUF backend의 메모리
 | `401 verify OAuth Authorization header invalid` | IUF backend 자동 갱신 로그, NRF·NEF 시간과 인증서 확인 |
 | `400 valid string intentId required` | 최상위 문자열 `intentId` 확인 |
 | `404 Not Found` | 수정한 NEF 이미지와 `mountSCFRelay()` 적용 확인 |
-| NRF `8001 Connection refused` | `free5gc-nrf`의 `192.168.192.145:8001:8000` 매핑 확인 |
-| NEF `8005 Connection refused` | `free5gc-nef`의 `192.168.192.145:8005:8000` 매핑 확인 |
+| NRF `8001 Connection refused` | `free5gc-nrf`의 `${CORE_VM_IP}:8001:8000` 매핑 확인 |
+| NEF `8005 Connection refused` | `free5gc-nef`의 `${CORE_VM_IP}:8005:8000` 매핑 확인 |
 | `invalid_client` 또는 `no producerNfInfor` | NRF 기동 후 NEF 재시작 및 등록 성공 확인 |
 | `502 SCF connection failed` | Core Flask `5001`, `SCF_INTENT_URL`, 방화벽 확인 |
 | `401 NEF relay key invalid` | NEF와 Core Flask가 같은 `scf.env` 값을 읽는지 확인 |
