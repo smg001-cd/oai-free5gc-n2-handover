@@ -2,6 +2,28 @@
 
 이 폴더는 IUF VM에서 웹으로 security intent를 작성하고 OAuth로 보호된 free5GC NEF에 전달하는 코드다. `patrick8link/i2nsf-security-controller`의 React 정책 입력 방식을 참고했으며, 이 실험에 필요한 필드만 남겼다.
 
+## 주소 표기
+
+이 문서에서는 개인 VM의 고정 IP 대신 다음 변수를 사용한다.
+
+| 표기 | 의미 |
+|---|---|
+| `${CORE_VM_IP}` | NRF, NEF와 Flask 수신기가 실행되는 Core VM의 IPv4 주소 |
+| `${IUF_VM_IP}` | IUF backend와 웹 화면이 실행되는 IUF VM의 IPv4 주소 |
+
+각 VM에서 주소를 확인한다.
+
+```bash
+ip -4 -br addr
+```
+
+문서의 연결 확인 명령을 실행하기 전에 아래 값을 자신의 환경에 맞게 설정한다.
+
+```bash
+export CORE_VM_IP="<Core VM IPv4 address>"
+export IUF_VM_IP="<IUF VM IPv4 address>"
+```
+
 ## 전체 흐름
 
 ```text
@@ -45,18 +67,18 @@ IUF를 실행하기 전에 Core VM에서 다음 서비스가 실행 중이어야
 
 | 서비스 | IUF에서 접근할 주소 |
 |---|---|
-| NRF | `http://192.168.192.145:8001` |
-| NEF custom API | `http://192.168.192.145:8005/lab-intents/v1/intents` |
-| Flask SCF substitute | NEF가 `http://192.168.192.145:5001/intent`로 접근 |
+| NRF | `http://${CORE_VM_IP}:8001` |
+| NEF custom API | `http://${CORE_VM_IP}:8005/lab-intents/v1/intents` |
+| Flask SCF substitute | NEF가 `http://${CORE_VM_IP}:5001/intent`로 접근 |
 
 IUF VM에서 포트를 확인한다.
 
 ```bash
-curl -i --max-time 5 http://192.168.192.145:8001/nnrf-nfm/v1/nf-instances
+curl -i --max-time 5 http://${CORE_VM_IP}:8001/nnrf-nfm/v1/nf-instances
 
 curl -i --max-time 5 \
   -X POST \
-  http://192.168.192.145:8005/lab-intents/v1/intents \
+  http://${CORE_VM_IP}:8005/lab-intents/v1/intents \
   -H 'Content-Type: application/json' \
   --data '{"intentId":"connection-test"}'
 ```
@@ -138,12 +160,14 @@ chmod 600 iuf.env
 cat iuf.env
 ```
 
-```text
-NEF_URL=http://192.168.192.145:8005/lab-intents/v1/intents
-NRF_URL=http://192.168.192.145:8001
-AF_IP=192.168.192.147
-PLMN_MCC=001
-PLMN_MNC=01
+```bash
+CORE_VM_IP="<Core VM IPv4 address>"
+IUF_VM_IP="<IUF VM IPv4 address>"
+NEF_URL="http://${CORE_VM_IP}:8005/lab-intents/v1/intents"
+NRF_URL="http://${CORE_VM_IP}:8001"
+AF_IP="${IUF_VM_IP}"
+PLMN_MCC="001"
+PLMN_MNC="01"
 ```
 
 ## 5. IUF 웹 실행
@@ -184,7 +208,7 @@ http://127.0.0.1:5000
 다른 장비에서 IUF VM으로 접근한다면:
 
 ```text
-http://192.168.192.147:5000
+http://${IUF_VM_IP}:5000
 ```
 
 ## 6. 상태와 OAuth 자동 발급 확인
@@ -198,7 +222,7 @@ curl -s http://127.0.0.1:5000/api/health | python3 -m json.tool
 ```json
 {
   "automaticOAuth": true,
-  "nefUrl": "http://192.168.192.145:8005/lab-intents/v1/intents",
+  "nefUrl": "http://${CORE_VM_IP}:8005/lab-intents/v1/intents",
   "service": "iuf-web",
   "status": "ok"
 }
