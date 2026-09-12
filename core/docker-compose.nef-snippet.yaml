@@ -1,0 +1,22 @@
+# Merge these fields into the existing services in docker-compose.yaml.
+# Before running Docker Compose, set the Core VM address:
+#   export CORE_VM_IP="<Core VM IPv4 address>"
+services:
+  free5gc-nrf:
+    ports:
+      - "${CORE_VM_IP}:8001:8000"
+
+  free5gc-nef:
+    build:
+      context: ./base
+      dockerfile: Dockerfile.nf
+      args:
+        F5GC_MODULE: nef
+    image: free5gc/nef:iuf-relay
+    ports:
+      - "${CORE_VM_IP}:8005:8000"
+    env_file:
+      - ./flask-nef/scf.env
+    environment:
+      GIN_MODE: release
+      SCF_INTENT_URL: "http://${CORE_VM_IP}:5001/intent"
