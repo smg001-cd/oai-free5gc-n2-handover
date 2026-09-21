@@ -30,6 +30,8 @@ services:
 
   free5gc-nrf:
     container_name: nrf
+    ports:
+    - "192.168.192.145:8001:8000"
     image: free5gc/nrf:v4.2.3
     command: ./nrf -c ./config/nrfcfg.yaml
     expose:
@@ -67,6 +69,27 @@ services:
           - amf.free5gc.org
     depends_on:
       - free5gc-nrf
+
+  # free5gc-amf:
+  #   container_name: amf
+  #   image: free5gc/amf_new:v4.2.3
+  #   command: ./amf -c ./config/amfcfg.yaml
+  #   expose:
+  #     - "8000"
+  #   ports:
+  #     - "38412:38412/sctp" 
+  #   volumes:
+  #     - ./config/amfcfg.yaml:/free5gc/config/amfcfg.yaml
+  #     - ./cert:/free5gc/cert
+  #   environment:
+  #     GIN_MODE: release
+  #   networks:
+  #     privnet:
+  #       ipv4_address: 10.100.200.16
+  #       aliases:
+  #         - amf.free5gc.org
+  #   depends_on:
+  #     - free5gc-nrf
 
   free5gc-ausf:
     container_name: ausf
@@ -240,21 +263,62 @@ services:
       - free5gc-smf
     #  - free5gc-upf
 
+  # free5gc-nef:
+  #   container_name: nef
+  #   image: free5gc/nef:v4.2.3
+  #   command: ./nef -c ./config/nefcfg.yaml
+  #   expose:
+  #     - "8000"
+  #   ports:
+  #     - "127.0.0.1:8005:8000"
+  #   volumes:
+  #     - ./config/nefcfg.yaml:/free5gc/config/nefcfg.yaml
+  #     - ./cert:/free5gc/cert
+  #   environment:
+  #     GIN_MODE: release
+  #   networks:
+  #     privnet:
+  #       aliases:
+  #         - nef.free5gc.org
+  #   depends_on:
+  #     - db
+  #     - free5gc-nrf
+
   free5gc-nef:
     container_name: nef
-    image: free5gc/nef:v4.2.3
+
+    build:
+      context: ./base
+      dockerfile: Dockerfile.nf
+      args:
+        F5GC_MODULE: nef
+
+    image: free5gc/nef:scf-local
+
     command: ./nef -c ./config/nefcfg.yaml
+
     expose:
       - "8000"
+
+    ports:
+      - "192.168.192.145:8005:8000"
+
     volumes:
       - ./config/nefcfg.yaml:/free5gc/config/nefcfg.yaml
       - ./cert:/free5gc/cert
+
+    env_file:
+      - ./flask-nef/scf.env
+
     environment:
       GIN_MODE: release
+      SCF_INTENT_URL: http://192.168.192.145:5001/intent
+
     networks:
       privnet:
         aliases:
           - nef.free5gc.org
+
     depends_on:
       - db
       - free5gc-nrf

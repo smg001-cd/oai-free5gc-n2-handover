@@ -1,0 +1,14 @@
+{
+  "intentId": "intent-001",
+  "ueId": "imsi-001010000000001",
+  "ueIp": "10.0.1.1",
+  "dnn": "oai",
+  "appId": "edge-demo",
+  "targetDnai": "edge-b",
+  "policy": {
+    "action": "record-only",
+    "description": "IUF Web to NEF to Flask SCF receipt test"
+  }
+}
+
+

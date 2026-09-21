@@ -1,0 +1,9 @@
+flask-nef/.venv/
+flask-nef/.venv-core/
+flask-nef/__pycache__/
+flask-nef/scf.env
+flask-nef/logs/
+*.py[cod]
+*.log
+
+

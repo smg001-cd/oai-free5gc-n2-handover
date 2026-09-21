@@ -1,0 +1,11 @@
+backend/.venv/
+backend/__pycache__/
+backend/oauth/
+backend/logs/
+backend/iuf.env
+frontend/node_modules/
+frontend/build/
+*.py[cod]
+*.log
+
+
