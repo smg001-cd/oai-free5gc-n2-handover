@@ -1,144 +1,64 @@
-# IUF Web Intent Console
+# 4. IUF VM — 웹 설치와 intent 전송
 
-이 폴더는 IUF VM에서 웹으로 security intent를 작성하고 OAuth로 보호된 free5GC NEF에 전달하는 코드다. `patrick8link/i2nsf-security-controller`의 React 정책 입력 방식을 참고했으며, 이 실험에 필요한 필드만 남겼다.
+[전체 목차](../README.md) · 이전: [Core NEF·Flask](../core/README.md) · 다음: [운영·오류 해결](../docs/03-operations.md)
 
-## 주소 표기
+## 1. 시작 전 확인
 
-이 문서에서는 개인 VM의 고정 IP 대신 다음 변수를 사용한다.
-
-| 표기 | 의미 |
-|---|---|
-| `${CORE_VM_IP}` | NRF, NEF와 Flask 수신기가 실행되는 Core VM의 IPv4 주소 |
-| `${IUF_VM_IP}` | IUF backend와 웹 화면이 실행되는 IUF VM의 IPv4 주소 |
-
-각 VM에서 주소를 확인한다.
+이 문서의 명령은 모두 **VM5 IUF**에서 실행합니다. Core VM에서 NRF `8001`, 수정한 NEF `8005`, Core Flask `5001`이 준비되어 있어야 합니다. VM5의 React 웹과 Flask backend는 `5000`을 사용합니다. `npm start`를 별도 실행하지 않고, 빌드된 React를 Flask가 제공합니다.
 
 ```bash
-ip -4 -br addr
+source "$HOME/lab.env"
+test -f "$IUF_ROOT/backend/app.py"
+curl -i --max-time 5 "http://$CORE_VM_IP:8001/nnrf-nfm/v1/nf-instances"
+curl -i --max-time 5 -X POST \
+  "http://$CORE_VM_IP:8005/lab-intents/v1/intents" \
+  -H 'Content-Type: application/json' --data '{"intentId":"probe"}'
 ```
 
-문서의 연결 확인 명령을 실행하기 전에 아래 값을 자신의 환경에 맞게 설정한다.
+NRF의 HTTP 응답이 오는지, 두 번째 NEF 요청이 `401`인지 봅니다. 토큰 없는 요청에서 `401`은 OAuth 보호 점검의 정상 결과입니다. `404`는 라우트가 없다는 뜻일 수 있고, `Connection refused`는 서비스·포트·주소를 확인해야 합니다.
+
+## 2. Node.js 설치와 React 빌드
+
+이미 Node 22를 사용한다면 설치 단계는 건너뜁니다.
 
 ```bash
-export CORE_VM_IP="<Core VM IPv4 address>"
-export IUF_VM_IP="<IUF VM IPv4 address>"
+node --version
+npm --version
 ```
 
-## 전체 흐름
-
-```text
-Browser
-  → IUF Flask backend (IUF VM :5000)
-  → NRF token issuance (Core VM :8001)
-  → free5GC NEF custom API (Core VM :8005)
-  → Flask SCF substitute (Core VM :5001)
-  → flask-nef/logs/intents.jsonl
-```
-
-React는 화면만 담당한다. 브라우저에 OAuth 토큰을 저장하지 않는다. IUF의 `backend/app.py`가 AF로 NRF에 등록하고 NEF 접근 토큰을 발급받아 요청에 넣는다. 토큰 만료 60초 전에는 다음 intent 전송 시 새 토큰을 발급하며, NEF가 `401`을 반환하면 강제로 갱신한 뒤 한 번 재시도한다.
-
-## 폴더 구조
-
-```text
-iuf/
-├── README.md
-├── .gitignore
-├── examples/
-│   └── policy.json
-├── backend/
-│   ├── app.py
-│   ├── iuf.env.example
-│   └── requirements.txt
-└── frontend/
-    ├── package.json
-    ├── public/
-    │   └── index.html
-    └── src/
-        ├── App.js
-        ├── App.css
-        └── index.js
-```
-
-실행 중 `backend/.venv`, `backend/oauth`, `backend/logs`, `frontend/node_modules`, `frontend/build`가 생성된다. 토큰과 AF ID는 Git에 포함하지 않는다.
-
-## 1. Core VM 준비 확인
-
-IUF를 실행하기 전에 Core VM에서 다음 서비스가 실행 중이어야 한다.
-
-| 서비스 | IUF에서 접근할 주소 |
-|---|---|
-| NRF | `http://${CORE_VM_IP}:8001` |
-| NEF custom API | `http://${CORE_VM_IP}:8005/lab-intents/v1/intents` |
-| Flask SCF substitute | NEF가 `http://${CORE_VM_IP}:5001/intent`로 접근 |
-
-IUF VM에서 포트를 확인한다.
+Node 또는 nvm이 없다면 [nvm v0.40.3 공식 설치 안내](https://github.com/nvm-sh/nvm/tree/v0.40.3#installing-and-updating)에 따라 설치합니다. 아래는 설치 스크립트를 내려받아 확인한 뒤 실행하는 예제입니다.
 
 ```bash
-curl -i --max-time 5 http://${CORE_VM_IP}:8001/nnrf-nfm/v1/nf-instances
-
-curl -i --max-time 5 \
-  -X POST \
-  http://${CORE_VM_IP}:8005/lab-intents/v1/intents \
-  -H 'Content-Type: application/json' \
-  --data '{"intentId":"connection-test"}'
-```
-
-두 번째 요청에서 `401 Unauthorized`가 나오면 NEF 연결과 OAuth 보호가 정상이다.
-
-## 2. 소스 준비
-
-저장소 전체를 IUF VM에 clone하는 경우:
-
-```bash
-cd /home/tjralsrb
-git clone https://github.com/smg001-cd/oai-free5gc-n2-handover.git
-cd /home/tjralsrb/oai-free5gc-n2-handover/iuf
-```
-
-기존 `/home/tjralsrb/iuf`를 사용하려면 저장소의 `iuf` 폴더 안쪽 파일을 해당 디렉터리로 복사하고 아래 경로를 실제 위치로 바꾼다. 이하 예시는 저장소를 clone한 경로를 사용한다.
-
-```bash
-export IUF_ROOT=/home/tjralsrb/oai-free5gc-n2-handover/iuf
-```
-
-## 3. Node.js 확인과 React 빌드
-
-```bash
-node -v
-npm -v
-```
-
-`react-scripts` 빌드에는 최신 LTS Node.js 사용을 권장한다. 오래된 Node에서 `_ending; SyntaxError`가 발생하면 `nvm`으로 Node.js 22 이상을 설치한 후 기존 의존성을 지우고 다시 설치한다.
-
-```bash
+curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh \
+  -o /tmp/install-nvm.sh
+less /tmp/install-nvm.sh
+bash /tmp/install-nvm.sh
 export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+source "$NVM_DIR/nvm.sh"
 nvm install 22
 nvm use 22
-nvm alias default 22
+node --version
+npm --version
 ```
 
-React를 빌드한다.
+`less`는 `q`로 나갑니다. 기존 nvm 설치 경로가 다르면 그 경로의 `nvm.sh`를 읽습니다.
+
+React를 빌드합니다.
 
 ```bash
+source "$HOME/lab.env"
 cd "$IUF_ROOT/frontend"
-rm -rf node_modules
-rm -f package-lock.json
-npm install
+if [ -f package-lock.json ]; then npm ci; else npm install; fi
 npm run build
+test -f build/index.html && echo 'React build OK'
 ```
 
-확인:
+원본에는 lockfile이 없으므로 첫 설치는 `npm install`입니다. 만들어진 lockfile을 유지하면 같은 환경에서 `npm ci`로 재설치할 수 있습니다. 이 가이드는 lockfile과 `node_modules`를 무조건 삭제하는 절차를 사용하지 않습니다. 소스를 바꾼 뒤에는 `npm run build`를 다시 실행합니다.
+
+## 3. Python backend 설치
 
 ```bash
-test -f "$IUF_ROOT/frontend/build/index.html" && echo 'React build OK'
-```
-
-React는 처음과 소스 변경 후에만 다시 빌드한다. 운영 시 `npm start`는 필요하지 않으며 IUF Flask backend가 `frontend/build`를 제공한다.
-
-## 4. Python backend 설치
-
-```bash
+source "$HOME/lab.env"
 cd "$IUF_ROOT/backend"
 python3 -m venv .venv
 source .venv/bin/activate
@@ -147,22 +67,19 @@ python3 -m pip install -r requirements.txt
 python3 -m py_compile app.py
 ```
 
-환경 설정 파일을 만든다.
+처음 한 번 환경 파일을 만듭니다. 기존 파일은 덮어쓰지 않습니다.
 
 ```bash
-cp iuf.env.example iuf.env
+cp -n iuf.env.example iuf.env
 chmod 600 iuf.env
+nano iuf.env
 ```
 
-다른 환경에서는 `iuf.env`의 Core VM IP, IUF VM IP, PLMN 값을 수정한다.
+`<Core VM IPv4 address>`, `<IUF VM IPv4 address>`를 실제 IPv4로 바꿉니다. 예를 들어 이 가이드의 주소라면:
 
 ```bash
-cat iuf.env
-```
-
-```bash
-CORE_VM_IP="<Core VM IPv4 address>"
-IUF_VM_IP="<IUF VM IPv4 address>"
+CORE_VM_IP="192.168.192.145"
+IUF_VM_IP="192.168.192.147"
 NEF_URL="http://${CORE_VM_IP}:8005/lab-intents/v1/intents"
 NRF_URL="http://${CORE_VM_IP}:8001"
 AF_IP="${IUF_VM_IP}"
@@ -170,149 +87,140 @@ PLMN_MCC="001"
 PLMN_MNC="01"
 ```
 
-## 5. IUF 웹 실행
+이 파일은 Bash로 `source`합니다. 주소 변수 선언을 URL 선언보다 위에 둬야 `${CORE_VM_IP}`가 올바르게 확장됩니다. `AF_IP`는 IUF VM의 IP입니다. Core의 IP로 넣지 않습니다.
+
+## 4. IUF 웹 실행
+
+VM5의 전용 터미널에서:
 
 ```bash
+source "$HOME/lab.env"
 cd "$IUF_ROOT/backend"
 source .venv/bin/activate
-
 set -a
 source iuf.env
 set +a
-
 mkdir -p logs
-
-python3 -m gunicorn \
-  --bind 0.0.0.0:5000 \
-  --workers 1 \
-  --threads 4 \
-  --timeout 30 \
-  --access-logfile - \
-  --error-logfile - \
+set -o pipefail
+python3 -m gunicorn --bind 0.0.0.0:5000 \
+  --workers 1 --threads 4 --timeout 120 \
+  --access-logfile - --error-logfile - \
   app:app 2>&1 | tee -a logs/iuf-web.log
 ```
 
-정상 출력:
+`Listening at: http://0.0.0.0:5000`가 나오면 이 터미널은 켜 둡니다. 단일 worker를 사용하여 메모리 토큰·파일 상태 관리를 단순하게 유지합니다.
 
-```text
-Listening at: http://0.0.0.0:5000
-Booting worker with pid: ...
-```
-
-이 터미널은 실행 상태로 둔다. IUF VM의 브라우저에서는 다음 주소를 연다.
-
-```text
-http://127.0.0.1:5000
-```
-
-다른 장비에서 IUF VM으로 접근한다면:
-
-```text
-http://${IUF_VM_IP}:5000
-```
-
-## 6. 상태와 OAuth 자동 발급 확인
+VM5의 다른 터미널에서:
 
 ```bash
-curl -s http://127.0.0.1:5000/api/health | python3 -m json.tool
+source "$HOME/lab.env"
+curl --fail-with-body -sS http://127.0.0.1:5000/api/health | python3 -m json.tool
 ```
 
-정상 응답:
+`status=ok`, `service=iuf-web`, `automaticOAuth=true`와 실제 `nefUrl`을 확인합니다. 이 health는 backend 설정만 확인하며 NRF·NEF까지 호출하지는 않습니다.
+
+Windows 또는 다른 장비의 브라우저에서 `http://IUF실제IP:5000`을 엽니다. VM5 안의 브라우저라면 `http://127.0.0.1:5000`입니다.
+
+## 5. 웹 화면에서 입력할 값
+
+현재 화면은 **High-level intent**를 만듭니다. 예전 형식의 `ueIp`, `appId`, `targetDnai`, `policy.action=record-only`는 현재 변환기의 입력 형식이 아닙니다.
+
+| 항목 | 첫 시험 값 |
+|---|---|
+| Intent ID | `handover-fw-001` |
+| UE SUPI | `imsi-001010000000001` |
+| DNN | `oai` |
+| SST / SD | `1` / `010203` |
+| Destination IPv4/CIDR | `8.8.8.8/32` |
+| Protocol | `icmp` 또는 `any` |
+| Direction | `n6-egress` |
+| NSF Type / Action | `firewall` / `drop` |
+| Handover stage | `before-path-switch` |
+| Migration mode | `make-before-break` |
+
+ICMP·any에는 destination port를 지정하지 않습니다. TCP·UDP일 때만 1~65535의 port를 선택합니다. Intent ID는 영문·숫자·`_.:-` 1~128자입니다.
+
+전송 버튼을 누르면 IUF backend가 자동으로 다음 작업을 수행합니다.
+
+```text
+AF ID 생성 또는 재사용
+→ NRF에 AF profile 등록
+→ targetNfType=NEF, scope=3gpp-traffic-influence 토큰 발급
+→ NEF에 Bearer token으로 intent 전송
+→ NEF가 Core Flask 응답 중계
+→ 웹에서 Low-level YAML 확인·다운로드
+```
+
+Core에서 별도의 `issue_token.py`를 실행할 필요가 없습니다. 토큰 만료 60초 전부터 다음 요청 시 갱신하고, NEF가 `401`이면 강제로 토큰을 갱신하여 한 번 재시도합니다.
+
+## 6. 웹 대신 curl로 같은 경로 시험
+
+VM5의 점검 터미널에서:
+
+```bash
+source "$HOME/lab.env"
+python3 -m json.tool "$IUF_ROOT/examples/policy.json" >/dev/null
+curl --fail-with-body -i --max-time 90 \
+  -X POST http://127.0.0.1:5000/api/intents \
+  -H 'Content-Type: application/json' \
+  --data-binary @"$IUF_ROOT/examples/policy.json"
+```
+
+이 브랜치의 `examples/policy.json`은 현재 Core 변환기가 요구하는 `subject`, `traffic`, `securityControl`을 포함합니다. `/api/intents`에 보내면 IUF backend가 인증을 처리하므로 curl에 token을 직접 붙이지 않습니다. NEF의 `/lab-intents/v1/intents`에 직접 보낼 때에는 별도 OAuth token이 필요합니다.
+
+성공 시 HTTP `201`과 다음 주요 필드를 확인합니다. 아래는 응답에서 확인할 필드의 예시이며 전체 응답에는 정책 본문과 YAML도 들어 있습니다.
 
 ```json
 {
-  "automaticOAuth": true,
-  "nefUrl": "http://${CORE_VM_IP}:8005/lab-intents/v1/intents",
-  "service": "iuf-web",
-  "status": "ok"
+  "ok": true,
+  "upstreamStatus": 201,
+  "requestId": "32자리 소문자 hex",
+  "result": {
+    "status": "translated",
+    "intentId": "handover-fw-001",
+    "forwardedToCore": false
+  }
 }
 ```
 
-웹에서 처음 intent를 전송하면 backend가 자동으로 다음 파일을 만든다.
+`result.lowLevelPolicy`, `result.lowLevelYaml`, `result.lowLevelPolicyFile`, 두 hash도 확인합니다. HTTP 201은 정책 변환·파일 저장 성공이며 실제 UE 차단 성공을 뜻하지 않습니다. 실제 차단은 [2단계](../docs/02-firewall.md)에서 따로 시험합니다.
 
-```text
-backend/oauth/af-id.txt
-backend/oauth/token.json
-```
+## 7. 로그와 token 상태 확인
+
+VM5에서:
 
 ```bash
+source "$HOME/lab.env"
+tail -n 30 "$IUF_ROOT/backend/logs/iuf-web.log"
 ls -l "$IUF_ROOT/backend/oauth"
 ```
 
-토큰 문자열을 출력하지 않고 상태만 확인한다.
+최초 token 발급 이후 `oauth/af-id.txt`, `oauth/token.json`이 생깁니다. `af-id.txt`만 있으면 AF 등록 또는 token 발급 단계에서 중단되었을 수 있습니다. token 원문 대신 존재·만료 정보만 확인합니다.
 
 ```bash
 cd "$IUF_ROOT/backend"
 python3 - <<'PY'
 import json
-
-with open("oauth/token.json", encoding="utf-8") as token_file:
-    token = json.load(token_file)
-
-print("token present:", bool(token.get("access_token")))
-print("expires in:", token.get("expires_in"))
+import time
+from pathlib import Path
+p = Path('oauth/token.json')
+if not p.exists():
+    raise SystemExit('No token file: send an intent and check NRF/IUF logs')
+token = json.loads(p.read_text())
+print('token present:', bool(token.get('access_token')))
+print('seconds remaining:', int(float(token.get('_expires_at', 0)) - time.time()))
 PY
 ```
 
-Core VM의 `issue_token.py`는 사용하지 않는다. IUF backend가 NRF에서 직접 토큰을 발급받고 갱신한다.
+VM1의 [JSONL·YAML 검증 명령](../core/README.md#8-iuf에서-전송-후-저장-결과-검증)으로 같은 `requestId`와 hash를 확인하면 전체 전달·변환 경로가 확인됩니다.
 
-## 7. 웹에서 intent 전송
+## 8. 지원 action의 의미
 
-화면에서 다음 값을 입력할 수 있다.
-
-- Intent ID
-- UE ID
-- UE IPv4
-- DNN
-- Application ID
-- Target DNAI
-- Policy Action
-- Description
-
-**Intent 전송**을 누르면 성공 시 `HTTP 201`, `requestId`, NEF와 Core Flask의 저장 응답이 표시된다.
-
-웹을 사용하지 않고 IUF backend API만 시험하려면:
-
-```bash
-curl -i --max-time 30 \
-  -X POST \
-  http://127.0.0.1:5000/api/intents \
-  -H 'Content-Type: application/json' \
-  --data-binary @"$IUF_ROOT/examples/policy.json"
-```
-
-## 8. 로그 확인
-
-IUF backend 로그:
-
-```bash
-tail -f "$IUF_ROOT/backend/logs/iuf-web.log"
-```
-
-정상 전달 로그:
-
-```text
-IUF_WEB intentId=intent-001 requestId=... nef_status=201
-```
-
-Core VM의 NEF 및 Flask 로그 확인은 `core/README_IUF_NEF_FLASK.md`를 따른다. IUF 웹 응답, NEF 로그, Core의 `intents.jsonl`에서 동일한 `requestId`가 나오면 전달 경로가 확인된 것이다.
-
-## 오류 해결
-
-| 증상 | 의미와 확인 사항 |
+| NSF | 변환기가 built-in으로 표현하는 action |
 |---|---|
-| `React build not found` | `frontend`에서 `npm run build` 실행 |
-| `_ending; SyntaxError` | Node.js가 너무 오래됨. Node 22 이상으로 교체 후 `node_modules` 재설치 |
-| `502 NEF connection failed` | `NEF_URL`, Core `8005` 포트, 방화벽 확인 |
-| `503 No valid NEF token` | `NRF_URL` 설정과 Core `8001` 포트 확인 |
-| `Token issuance failed: HTTP 400` | NRF 로그의 `invalid_client`, NEF 등록과 서비스 scope 확인 |
-| `401 verify OAuth Authorization header invalid` | 자동 갱신 재시도 후에도 실패. NRF·NEF 시간과 인증서 확인 |
-| `af-id.txt`만 생성됨 | AF ID 생성 후 NRF 등록 또는 토큰 발급에서 중단됨 |
+| firewall | `drop`, `reject`, `accept`, `log` |
+| anti-ddos | `rate-limit`, `drop`, `alert`, `redirect-scrubber` |
 
-NRF를 재시작했다면 Core VM에서 NEF를 다시 시작하여 NRF 등록을 갱신한다.
+Anti-DDoS에는 `parameters.detectionThresholdPps >= 1`, `rate-limit`에는 추가로 `parameters.rateLimitMbps >= 1`이 필요합니다. 다른 유효 action 이름은 `actionProfile=extension`으로 보존됩니다. 이는 YAML 변환 기능이며 이 저장소에 해당 action 집행기가 모두 구현된 것은 아닙니다.
 
-```bash
-docker compose restart free5gc-nef
-```
-
-
+오류 해결·재시작: [5. 운영 문서](../docs/03-operations.md).

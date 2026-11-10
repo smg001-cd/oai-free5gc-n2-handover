@@ -3,6 +3,7 @@ flask-nef/.venv-core/
 flask-nef/__pycache__/
 flask-nef/scf.env
 flask-nef/logs/
+flask-nef/policies/
 *.py[cod]
 *.log
 

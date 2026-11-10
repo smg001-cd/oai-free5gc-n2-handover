@@ -1,0 +1,26 @@
+# Copy to ~/free5gc-compose/docker-compose.yaml on each Edge VM.
+# Create the .env described in docs/01-handover.md.
+services:
+  free5gc-upf:
+    container_name: upf
+    image: free5gc/upf:v4.2.3
+    # Host NAT/FORWARD is configured explicitly in the guide.
+    command: ./upf -c ./config/upfcfg.yaml
+    volumes:
+      - ./config/upfcfg.yaml:/free5gc/config/upfcfg.yaml:ro
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+
+  upf-nsf-manager:
+    container_name: ${MANAGER_NAME:?Set MANAGER_NAME in .env}
+    image: upf-nsf-manager:latest
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      EDGE_ID: ${EDGE_ID:?Set EDGE_ID in .env}
+      FIREWALL_NSF_IMAGE: firewall-nsf:latest
+      FIREWALL_NSF_NAME: ${FIREWALL_NAME:?Set FIREWALL_NAME in .env}
+      FIREWALL_NSF_PORT: "18080"
+    restart: unless-stopped

@@ -1,14 +1,28 @@
 {
-  "intentId": "intent-001",
-  "ueId": "imsi-001010000000001",
-  "ueIp": "10.0.1.1",
-  "dnn": "oai",
-  "appId": "edge-demo",
-  "targetDnai": "edge-b",
-  "policy": {
-    "action": "record-only",
-    "description": "IUF Web to NEF to Flask SCF receipt test"
-  }
+  "schemaVersion": "i2nsf.intent/v1alpha1",
+  "intentId": "handover-fw-001",
+  "subject": {
+    "supi": "imsi-001010000000001",
+    "dnn": "oai",
+    "snssai": { "sst": 1, "sd": "010203" }
+  },
+  "trigger": {
+    "type": "n2-handover",
+    "enforcementStage": "before-path-switch"
+  },
+  "traffic": {
+    "destinationIpv4Cidr": "8.8.8.8/32",
+    "protocol": "icmp",
+    "direction": "n6-egress"
+  },
+  "securityControl": {
+    "nsfType": "firewall",
+    "action": "drop",
+    "parameters": {}
+  },
+  "policyMigration": {
+    "mode": "make-before-break",
+    "sourceRemoval": "after-target-active"
+  },
+  "description": "Intent relay and YAML translation test; no automatic enforcement"
 }
-
-
